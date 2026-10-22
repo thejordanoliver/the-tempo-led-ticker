@@ -161,10 +161,17 @@ void updateTempoVisuals(uint32_t now) {
     }
     draw();
   } else if (tempoMode == TempoDisplayMode::Logo) {
-    if (!elapsed(now, lastVisualFrameAt, 1800)) return;
-    lastVisualFrameAt = now;
-    showAwayLogo = !showAwayLogo;
-    draw();
+    if (gameCount > 1 && elapsed(now, lastRotateAt, ROTATE_MS)) {
+      gameIndex = (gameIndex + 1) % gameCount;
+      lastRotateAt = now;
+      showAwayLogo = true;
+      lastVisualFrameAt = now;
+      draw();
+    } else if (elapsed(now, lastVisualFrameAt, 1800)) {
+      lastVisualFrameAt = now;
+      showAwayLogo = !showAwayLogo;
+      draw();
+    }
   } else if (gameCount > 1 && elapsed(now, lastRotateAt, ROTATE_MS)) {
     gameIndex = (gameIndex + 1) % gameCount;
     lastRotateAt = now;
