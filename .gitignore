@@ -13,3 +13,6 @@ secrets.h
 
 playwright-report/
 test-results/
+
+# Locally generated, potentially licensed team sprites
+**/logos.generated.h

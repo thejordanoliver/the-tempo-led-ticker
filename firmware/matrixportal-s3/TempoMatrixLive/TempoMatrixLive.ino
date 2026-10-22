@@ -45,6 +45,11 @@ struct Game {
   uint16_t awayColor = 0;
   uint16_t homeColor = 0;
   bool showScores = false;
+  bool scheduled = true;
+  int8_t awayRank = -1;
+  int8_t homeRank = -1;
+  char awayRecord[8] = "";
+  char homeRecord[8] = "";
 };
 
 Game games[MAX_GAMES];
@@ -138,6 +143,110 @@ int16_t readScore(JsonVariantConst value) {
              ? static_cast<int16_t>(number) : -1;
 }
 
+
+int8_t readRank(JsonVariantConst value) {
+  if (value.is<bool>() || value.isNull()) return -1;
+  int n = -1;
+  if (value.is<int>()) n = value.as<int>();
+  else {
+    const char *text = value.as<const char *>();
+    if (!text || !*text) return -1;
+    char *end = nullptr;
+    const long v = strtol(text, &end, 10);
+    if (end == text || *end != '\0' || v < 1 || v > 98) return -1;
+    n = static_cast<int>(v);
+  }
+  return n > 0 && n < 99 ? static_cast<int8_t>(n) : -1;
+}
+
+void readRecord(JsonVariantConst value, char (&output)[8]) {
+  output[0] = '\0';
+  const char *text = value.as<const char *>();
+  if (!text || strlen(text) >= sizeof(output)) return;
+  const char *dash = strchr(text, '-');
+  if (!dash || dash == text || dash[1] == '\0' || strchr(dash + 1, '-')) return;
+  for (const char *p = text; *p; ++p) {
+    if (p != dash && !isdigit(static_cast<unsigned char>(*p))) return;
+  }
+  strcpy(output, text);
+}
+
+// Convert a UTC calendar date to Unix seconds without timegm(), which is
+// not declared by some ESP32 Arduino/newlib toolchains. Gregorian calendar;
+// based on the civil-date-to-days algorithm (epoch 1970-01-01).
+static time_t tempoUtcEpoch(const tm &date) {
+  const int month = date.tm_mon + 1;
+  const int day = date.tm_mday;
+  int year = date.tm_year + 1900;
+  year -= month <= 2;
+  const int era = year / 400;   // Supported input years are >= 2020.
+  const unsigned yearOfEra = static_cast<unsigned>(year - era * 400);
+  const int shiftedMonth = month + (month > 2 ? -3 : 9);
+  const unsigned dayOfYear = (153u * static_cast<unsigned>(shiftedMonth) + 2u) / 5u
+                            + static_cast<unsigned>(day - 1);
+  const unsigned yearOfEraDays = yearOfEra * 365u + yearOfEra / 4u
+                                 - yearOfEra / 100u + dayOfYear;
+  const int64_t days = static_cast<int64_t>(era) * 146097
+                       + yearOfEraDays - 719468;
+  const int64_t seconds = days * 86400
+                       + date.tm_hour * 3600 + date.tm_min * 60 + date.tm_sec;
+  const time_t result = static_cast<time_t>(seconds);
+  return static_cast<int64_t>(result) == seconds ? result : static_cast<time_t>(-1);
+}
+
+// Parse ISO8601 timestamps, including Z, fractional seconds and +/-HH:MM.
+// tzset() in setup configures America/New_York, including DST transitions.
+bool formatLocalStart(const char *raw, char (&output)[20]) {
+  if (!raw) return false;
+  int year=0, month=0, day=0, hour=0, minute=0, second=0, count=0;
+  if (sscanf(raw, "%4d-%2d-%2dT%2d:%2d:%2d%n",
+             &year, &month, &day, &hour, &minute, &second, &count) != 6)
+    return false;
+  if (year < 2020 || year > 2100 || month < 1 || month > 12 ||
+      day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59)
+    return false;
+  const char *zone = raw + count;
+  if (*zone == '.') {
+    ++zone;
+    if (!isdigit(static_cast<unsigned char>(*zone))) return false;
+    while (isdigit(static_cast<unsigned char>(*zone))) ++zone;
+  }
+  int offsetSeconds = 0;
+  if (*zone == 'Z' && zone[1] == '\0') {
+    // Already UTC.
+  } else if ((*zone == '+' || *zone == '-') && strlen(zone) == 6 &&
+             zone[3] == ':' && isdigit(static_cast<unsigned char>(zone[1])) &&
+             isdigit(static_cast<unsigned char>(zone[2])) &&
+             isdigit(static_cast<unsigned char>(zone[4])) &&
+             isdigit(static_cast<unsigned char>(zone[5]))) {
+    const int oh = (zone[1] - '0') * 10 + (zone[2] - '0');
+    const int om = (zone[4] - '0') * 10 + (zone[5] - '0');
+    if (oh > 23 || om > 59) return false;
+    offsetSeconds = (oh * 3600 + om * 60) * (*zone == '+' ? 1 : -1);
+  } else return false;
+  tm utc = {};
+  utc.tm_year = year - 1900;
+  utc.tm_mon = month - 1;
+  utc.tm_mday = day;
+  utc.tm_hour = hour;
+  utc.tm_min = minute;
+  utc.tm_sec = second;
+  const time_t timestamp = tempoUtcEpoch(utc);
+  if (timestamp < 0) return false;
+  tm check = {};
+  gmtime_r(&timestamp, &check);
+  if (check.tm_year != year - 1900 || check.tm_mon != month - 1 ||
+      check.tm_mday != day || check.tm_hour != hour ||
+      check.tm_min != minute || check.tm_sec != second) return false;
+  const time_t adjusted = timestamp - offsetSeconds;
+  tm local = {};
+  if (!localtime_r(&adjusted, &local)) return false;
+  const int h12 = local.tm_hour % 12 ? local.tm_hour % 12 : 12;
+  snprintf(output, 20, "%d:%02d %s", h12, local.tm_min,
+           local.tm_hour < 12 ? "AM" : "PM");
+  return true;
+}
+
 void setStatus(JsonVariantConst value, Game &game) {
   JsonObjectConst status = value.as<JsonObjectConst>();
   const char *state = status["state"] | "";
@@ -194,11 +303,17 @@ void setStatus(JsonVariantConst value, Game &game) {
       snprintf(game.status, sizeof(game.status), "%s", periodText);
     }
   } else {
-    strcpy(game.status, "SCHEDULED");  // Phase 3 will add local start time.
+    strcpy(game.status, "SCHEDULED");
   }
+  game.scheduled = !game.showScores;
 }
 
 void setupFilter(JsonDocument &filter) {
+  filter["games"][0]["date"] = true;
+  filter["games"][0]["away"]["rank"] = true;
+  filter["games"][0]["away"]["record"] = true;
+  filter["games"][0]["home"]["rank"] = true;
+  filter["games"][0]["home"]["record"] = true;
   filter["games"][0]["away"]["code"] = true;
   filter["games"][0]["away"]["score"] = true;
   filter["games"][0]["away"]["primaryColor"] = true;
@@ -249,6 +364,15 @@ bool parseGames(Stream &stream) {
     g.awayColor = readColor(away["primaryColor"] | "");
     g.homeColor = readColor(home["primaryColor"] | "");
     setStatus(item["status"], g);
+    g.awayRank = readRank(away["rank"]);
+    g.homeRank = readRank(home["rank"]);
+    readRecord(away["record"], g.awayRecord);
+    readRecord(home["record"], g.homeRecord);
+    if (strcmp(g.status, "SCHEDULED") == 0) {
+      char startTime[20];
+      if (formatLocalStart(item["date"] | "", startTime))
+        strcpy(g.status, startTime);
+    }
     ++found;
   }
 
@@ -300,64 +424,7 @@ String buildUrl() {
   }
 }
 
-void drawLabel(int16_t x, int16_t y, const char *text, uint16_t color,
-               uint8_t scale = 1) {
-  matrix.setTextColor(color);
-  matrix.setTextSize(scale);
-  matrix.setCursor(x, y);
-  matrix.print(text);
-  matrix.setTextSize(1);
-}
-
-void drawCenter(int16_t y, const char *label, uint16_t color) {
-  int16_t x = (WIDTH - static_cast<int16_t>(strlen(label)) * 6) / 2;
-  drawLabel(x < 0 ? 0 : x, y, label, color);
-}
-
-DisplayState screenState() {
-  if (!configured) return DisplayState::Setup;
-  if (hasGoodResponse) return gameCount == 0 ? DisplayState::Empty : DisplayState::Games;
-  return WiFi.status() == WL_CONNECTED ? DisplayState::Offline : DisplayState::Connecting;
-}
-
-void draw() {
-  matrix.fillScreen(0);
-  matrix.setTextWrap(false);
-  const uint16_t muted = rgb(105, 135, 165);
-  const uint16_t bright = rgb(205, 215, 225);
-
-  drawLabel(3, 2, "TEMPO", rgb(0, 165, 155));
-  drawLabel(stale ? 94 : 108, 2, stale ? "STALE" : leagueName(league),
-            stale ? rgb(235, 125, 60) : muted);
-  matrix.drawFastHLine(0, 12, WIDTH, muted);
-  const DisplayState state = screenState();
-  if (state != DisplayState::Games) {
-    if (state == DisplayState::Setup) drawCenter(28, "SET CONFIG", bright);
-    else if (state == DisplayState::Connecting) drawCenter(28, "CONNECTING", bright);
-    else if (state == DisplayState::Offline) drawCenter(28, "NO API DATA", bright);
-    else drawCenter(28, "NO GAMES", bright);
-  } else {
-    const Game &g = games[gameIndex];
-    drawLabel(8, 17, g.away, g.awayColor);
-    const int16_t homeX = WIDTH - static_cast<int16_t>(strlen(g.home)) * 6 - 8;
-    drawLabel(homeX, 17, g.home, g.homeColor);
-
-    char awayScore[5];
-    char homeScore[5];
-    if (g.showScores && g.awayScore >= 0)
-      snprintf(awayScore, sizeof(awayScore), "%d", g.awayScore);
-    else strcpy(awayScore, "-");
-    if (g.showScores && g.homeScore >= 0)
-      snprintf(homeScore, sizeof(homeScore), "%d", g.homeScore);
-    else strcpy(homeScore, "-");
-    drawLabel(8, 29, awayScore, bright, 2);
-    drawLabel(84, 29, homeScore, bright, 2);
-    drawLabel(61, 34, "-", muted);
-    matrix.drawFastHLine(0, 51, WIDTH, muted);
-    drawCenter(55, g.status, rgb(185, 200, 235));
-  }
-  matrix.show();
-}
+#include "TempoDisplay.h"
 
 bool requestWithClient(WiFiClient &client, const String &url) {
   HTTPClient http;
@@ -416,6 +483,7 @@ bool fetchScores() {
 
 void printHelp() {
   Serial.println("[tempo] n next game | r retry fetch | h help");
+  Serial.println("[tempo] 1 scoreboard | 2 scrolling ticker | 3 team logo | m cycle mode");
   Serial.println("[tempo] Refresh: 60s, retry on error: 15s, rotation: 5s");
   Serial.println("[tempo] No credentials/API secrets are printed");
 }
@@ -423,7 +491,7 @@ void printHelp() {
 void setup() {
   Serial.begin(115200);
   delay(400);
-  Serial.println("\n[tempo] Phase 2 Wi-Fi scoreboard (hardware validation pending)");
+  Serial.println("\n[tempo] Phase 3 display + Wi-Fi (hardware validation pending)");
   const ProtomatterStatus result = matrix.begin();
   Serial.print("[tempo] Protomatter status: ");
   Serial.println(static_cast<int>(result));
@@ -431,6 +499,8 @@ void setup() {
     Serial.println("[tempo] Matrix failed to initialize");
     for (;;) delay(500);
   }
+  setenv("TZ", NEW_YORK_TZ, 1);
+  tzset();
   league = chooseLeague();
   String base = TEMPO_API_BASE_URL;
   const bool urlValid = base.startsWith("http://") || base.startsWith("https://");
@@ -465,6 +535,10 @@ void loop() {
           draw();
         }
         break;
+      case '1': selectTempoMode(TempoDisplayMode::Scoreboard); draw(); break;
+      case '2': selectTempoMode(TempoDisplayMode::Ticker); draw(); break;
+      case '3': selectTempoMode(TempoDisplayMode::Logo); draw(); break;
+      case 'm': case 'M': nextTempoMode(); draw(); break;
       case 'r': case 'R': fetchImmediately = true; break;
       case 'h': case 'H': printHelp(); break;
       default: break;
@@ -510,10 +584,6 @@ void loop() {
     }
   }
 
-  if (gameCount > 1 && elapsed(millis(), lastRotateAt, ROTATE_MS)) {
-    gameIndex = (gameIndex + 1) % gameCount;
-    lastRotateAt = millis();
-    draw();
-  }
+  updateTempoVisuals(millis());
   delay(10);
 }
