@@ -1,6 +1,6 @@
 # Tempo LED Ticker
 
-Standalone browser simulator for the MatrixPortal S3 and a 128×64 HUB75 panel. No firmware is implemented. All API access is read only; no browser secrets are required.
+Browser simulator for the MatrixPortal S3 and a 128×64 HUB75 panel, plus a first-stage **Arduino hardware diagnostic sketch**. The simulator's API access is read only; no browser secrets are required. Phase 1 firmware uses only local test patterns, not the Tempo API.
 
 ## Run locally
 
@@ -41,7 +41,7 @@ Use HTTP rather than opening `file://`: ES modules and fetch are restricted for 
 
 ## Hardware path
 
-The canvas backing buffer remains exactly 128×64 pixels, enlarged with nearest-neighbor rendering. It is a visual preview, not an electrical or timing emulator. Future firmware can consume the same nested API contract and port the normalized model, bitmap font and bounded layouts to Adafruit Protomatter. Wi-Fi setup, credentials, refresh scheduling and hardware verification are future work. The browser loads logo URLs with anonymous CORS and renders them within 32×32 pixels beside each team (48×48 in logo mode), preserving aspect ratio. Missing, failed, timed-out or CORS-blocked images show a team initial. Images are cached by URL with a bounded cache; the canvas remains exactly 128×64. The layout targets the 2 mm pitch 128×64 panel (Adafruit product 6484). Browser image decoding does not implement ESP32 firmware logo support. No commits or pushes are made automatically.
+The canvas backing buffer remains exactly 128×64 pixels, enlarged with nearest-neighbor rendering. It is a visual preview, not an electrical or timing emulator. The [Phase 1 MatrixPortal S3 firmware](firmware/matrixportal-s3/README.md) uses Adafruit Protomatter to cycle through color bars, a 128×64 grid and an illustrative scoreboard on real hardware. See its instructions for wiring, Arduino IDE setup, upload, Serial diagnostics, and a verification checklist. Wi-Fi setup, API integration, logo conversion, and simulator-parity layouts remain future work; physical hardware verification is pending. The browser loads logo URLs with anonymous CORS and renders them within 32×32 pixels beside each team (48×48 in logo mode), preserving aspect ratio. Missing, failed, timed-out or CORS-blocked images show a team initial. Images are cached by URL with a bounded cache; the canvas remains exactly 128×64. The layout targets the 2 mm pitch 128×64 panel (Adafruit product 6484). Browser image decoding does not implement ESP32 firmware logo support. No commits or pushes are made automatically.
 
 ## Team schedules
 
