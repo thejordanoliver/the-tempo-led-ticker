@@ -63,8 +63,8 @@ static void drawScoreboard(const Game &g) {
   // Same 128x64 anchors and variable text scale as simulator/index.html.
   const uint8_t awayScale = tempoTextWidth(g.away, 2) <= 36 ? 2 : 1;
   const uint8_t homeScale = tempoTextWidth(g.home, 2) <= 36 ? 2 : 1;
-  tempoText(18 - tempoTextWidth(g.away, awayScale) / 2, 38, g.awayColor, awayScale);
-  tempoText(110 - tempoTextWidth(g.home, homeScale) / 2, 38, g.homeColor, homeScale);
+  tempoText(18 - tempoTextWidth(g.away, awayScale) / 2, 38, g.away, g.awayColor, awayScale);
+  tempoText(110 - tempoTextWidth(g.home, homeScale) / 2, 38, g.home, g.homeColor, homeScale);
   char rank[5];
   rankLabel(g.awayRank, rank);
   if (*rank) tempoText(38, 38 + 5 * (awayScale - 1), rank, hint);
