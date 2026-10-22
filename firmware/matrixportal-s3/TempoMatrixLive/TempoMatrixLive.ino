@@ -401,64 +401,7 @@ String buildUrl() {
   }
 }
 
-void drawLabel(int16_t x, int16_t y, const char *text, uint16_t color,
-               uint8_t scale = 1) {
-  matrix.setTextColor(color);
-  matrix.setTextSize(scale);
-  matrix.setCursor(x, y);
-  matrix.print(text);
-  matrix.setTextSize(1);
-}
-
-void drawCenter(int16_t y, const char *label, uint16_t color) {
-  int16_t x = (WIDTH - static_cast<int16_t>(strlen(label)) * 6) / 2;
-  drawLabel(x < 0 ? 0 : x, y, label, color);
-}
-
-DisplayState screenState() {
-  if (!configured) return DisplayState::Setup;
-  if (hasGoodResponse) return gameCount == 0 ? DisplayState::Empty : DisplayState::Games;
-  return WiFi.status() == WL_CONNECTED ? DisplayState::Offline : DisplayState::Connecting;
-}
-
-void draw() {
-  matrix.fillScreen(0);
-  matrix.setTextWrap(false);
-  const uint16_t muted = rgb(105, 135, 165);
-  const uint16_t bright = rgb(205, 215, 225);
-
-  drawLabel(3, 2, "TEMPO", rgb(0, 165, 155));
-  drawLabel(stale ? 94 : 108, 2, stale ? "STALE" : leagueName(league),
-            stale ? rgb(235, 125, 60) : muted);
-  matrix.drawFastHLine(0, 12, WIDTH, muted);
-  const DisplayState state = screenState();
-  if (state != DisplayState::Games) {
-    if (state == DisplayState::Setup) drawCenter(28, "SET CONFIG", bright);
-    else if (state == DisplayState::Connecting) drawCenter(28, "CONNECTING", bright);
-    else if (state == DisplayState::Offline) drawCenter(28, "NO API DATA", bright);
-    else drawCenter(28, "NO GAMES", bright);
-  } else {
-    const Game &g = games[gameIndex];
-    drawLabel(8, 17, g.away, g.awayColor);
-    const int16_t homeX = WIDTH - static_cast<int16_t>(strlen(g.home)) * 6 - 8;
-    drawLabel(homeX, 17, g.home, g.homeColor);
-
-    char awayScore[5];
-    char homeScore[5];
-    if (g.showScores && g.awayScore >= 0)
-      snprintf(awayScore, sizeof(awayScore), "%d", g.awayScore);
-    else strcpy(awayScore, "-");
-    if (g.showScores && g.homeScore >= 0)
-      snprintf(homeScore, sizeof(homeScore), "%d", g.homeScore);
-    else strcpy(homeScore, "-");
-    drawLabel(8, 29, awayScore, bright, 2);
-    drawLabel(84, 29, homeScore, bright, 2);
-    drawLabel(61, 34, "-", muted);
-    matrix.drawFastHLine(0, 51, WIDTH, muted);
-    drawCenter(55, g.status, rgb(185, 200, 235));
-  }
-  matrix.show();
-}
+#include "TempoDisplay.h"
 
 bool requestWithClient(WiFiClient &client, const String &url) {
   HTTPClient http;
@@ -517,6 +460,7 @@ bool fetchScores() {
 
 void printHelp() {
   Serial.println("[tempo] n next game | r retry fetch | h help");
+  Serial.println("[tempo] 1 scoreboard | 2 scrolling ticker | 3 team logo | m cycle mode");
   Serial.println("[tempo] Refresh: 60s, retry on error: 15s, rotation: 5s");
   Serial.println("[tempo] No credentials/API secrets are printed");
 }
@@ -524,7 +468,7 @@ void printHelp() {
 void setup() {
   Serial.begin(115200);
   delay(400);
-  Serial.println("\n[tempo] Phase 2 Wi-Fi scoreboard (hardware validation pending)");
+  Serial.println("\n[tempo] Phase 3 display + Wi-Fi (hardware validation pending)");
   const ProtomatterStatus result = matrix.begin();
   Serial.print("[tempo] Protomatter status: ");
   Serial.println(static_cast<int>(result));
@@ -532,6 +476,8 @@ void setup() {
     Serial.println("[tempo] Matrix failed to initialize");
     for (;;) delay(500);
   }
+  setenv("TZ", NEW_YORK_TZ, 1);
+  tzset();
   league = chooseLeague();
   String base = TEMPO_API_BASE_URL;
   const bool urlValid = base.startsWith("http://") || base.startsWith("https://");
@@ -566,6 +512,10 @@ void loop() {
           draw();
         }
         break;
+      case '1': selectTempoMode(TempoDisplayMode::Scoreboard); draw(); break;
+      case '2': selectTempoMode(TempoDisplayMode::Ticker); draw(); break;
+      case '3': selectTempoMode(TempoDisplayMode::Logo); draw(); break;
+      case 'm': case 'M': nextTempoMode(); draw(); break;
       case 'r': case 'R': fetchImmediately = true; break;
       case 'h': case 'H': printHelp(); break;
       default: break;
@@ -611,10 +561,6 @@ void loop() {
     }
   }
 
-  if (gameCount > 1 && elapsed(millis(), lastRotateAt, ROTATE_MS)) {
-    gameIndex = (gameIndex + 1) % gameCount;
-    lastRotateAt = millis();
-    draw();
-  }
+  updateTempoVisuals(millis());
   delay(10);
 }
