@@ -171,8 +171,31 @@ void readRecord(JsonVariantConst value, char (&output)[8]) {
   strcpy(output, text);
 }
 
+// Convert a UTC calendar date to Unix seconds without timegm(), which is
+// not declared by some ESP32 Arduino/newlib toolchains. Gregorian calendar;
+// based on the civil-date-to-days algorithm (epoch 1970-01-01).
+static time_t tempoUtcEpoch(const tm &date) {
+  const int month = date.tm_mon + 1;
+  const int day = date.tm_mday;
+  int year = date.tm_year + 1900;
+  year -= month <= 2;
+  const int era = year / 400;   // Supported input years are >= 2020.
+  const unsigned yearOfEra = static_cast<unsigned>(year - era * 400);
+  const int shiftedMonth = month + (month > 2 ? -3 : 9);
+  const unsigned dayOfYear = (153u * static_cast<unsigned>(shiftedMonth) + 2u) / 5u
+                            + static_cast<unsigned>(day - 1);
+  const unsigned yearOfEraDays = yearOfEra * 365u + yearOfEra / 4u
+                                 - yearOfEra / 100u + dayOfYear;
+  const int64_t days = static_cast<int64_t>(era) * 146097
+                       + yearOfEraDays - 719468;
+  const int64_t seconds = days * 86400
+                       + date.tm_hour * 3600 + date.tm_min * 60 + date.tm_sec;
+  const time_t result = static_cast<time_t>(seconds);
+  return static_cast<int64_t>(result) == seconds ? result : static_cast<time_t>(-1);
+}
+
 // Parse ISO8601 timestamps, including Z, fractional seconds and +/-HH:MM.
-// tzset() in setup configures America/New_York; timegm treats input as UTC.
+// tzset() in setup configures America/New_York, including DST transitions.
 bool formatLocalStart(const char *raw, char (&output)[20]) {
   if (!raw) return false;
   int year=0, month=0, day=0, hour=0, minute=0, second=0, count=0;
@@ -208,7 +231,7 @@ bool formatLocalStart(const char *raw, char (&output)[20]) {
   utc.tm_hour = hour;
   utc.tm_min = minute;
   utc.tm_sec = second;
-  const time_t timestamp = timegm(&utc);
+  const time_t timestamp = tempoUtcEpoch(utc);
   if (timestamp < 0) return false;
   tm check = {};
   gmtime_r(&timestamp, &check);
