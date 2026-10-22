@@ -45,6 +45,11 @@ struct Game {
   uint16_t awayColor = 0;
   uint16_t homeColor = 0;
   bool showScores = false;
+  bool scheduled = true;
+  int8_t awayRank = -1;
+  int8_t homeRank = -1;
+  char awayRecord[8] = "";
+  char homeRecord[8] = "";
 };
 
 Game games[MAX_GAMES];
@@ -138,6 +143,87 @@ int16_t readScore(JsonVariantConst value) {
              ? static_cast<int16_t>(number) : -1;
 }
 
+
+int8_t readRank(JsonVariantConst value) {
+  if (value.is<bool>() || value.isNull()) return -1;
+  int n = -1;
+  if (value.is<int>()) n = value.as<int>();
+  else {
+    const char *text = value.as<const char *>();
+    if (!text || !*text) return -1;
+    char *end = nullptr;
+    const long v = strtol(text, &end, 10);
+    if (end == text || *end != '\0' || v < 1 || v > 98) return -1;
+    n = static_cast<int>(v);
+  }
+  return n > 0 && n < 99 ? static_cast<int8_t>(n) : -1;
+}
+
+void readRecord(JsonVariantConst value, char (&output)[8]) {
+  output[0] = '\0';
+  const char *text = value.as<const char *>();
+  if (!text || strlen(text) >= sizeof(output)) return;
+  const char *dash = strchr(text, '-');
+  if (!dash || dash == text || dash[1] == '\0' || strchr(dash + 1, '-')) return;
+  for (const char *p = text; *p; ++p) {
+    if (p != dash && !isdigit(static_cast<unsigned char>(*p))) return;
+  }
+  strcpy(output, text);
+}
+
+// Parse ISO8601 timestamps, including Z, fractional seconds and +/-HH:MM.
+// tzset() in setup configures America/New_York; timegm treats input as UTC.
+bool formatLocalStart(const char *raw, char (&output)[20]) {
+  if (!raw) return false;
+  int year=0, month=0, day=0, hour=0, minute=0, second=0, count=0;
+  if (sscanf(raw, "%4d-%2d-%2dT%2d:%2d:%2d%n",
+             &year, &month, &day, &hour, &minute, &second, &count) != 6)
+    return false;
+  if (year < 2020 || year > 2100 || month < 1 || month > 12 ||
+      day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59)
+    return false;
+  const char *zone = raw + count;
+  if (*zone == '.') {
+    ++zone;
+    if (!isdigit(static_cast<unsigned char>(*zone))) return false;
+    while (isdigit(static_cast<unsigned char>(*zone))) ++zone;
+  }
+  int offsetSeconds = 0;
+  if (*zone == 'Z' && zone[1] == '\0') {
+    // Already UTC.
+  } else if ((*zone == '+' || *zone == '-') && strlen(zone) == 6 &&
+             zone[3] == ':' && isdigit(static_cast<unsigned char>(zone[1])) &&
+             isdigit(static_cast<unsigned char>(zone[2])) &&
+             isdigit(static_cast<unsigned char>(zone[4])) &&
+             isdigit(static_cast<unsigned char>(zone[5]))) {
+    const int oh = (zone[1] - '0') * 10 + (zone[2] - '0');
+    const int om = (zone[4] - '0') * 10 + (zone[5] - '0');
+    if (oh > 23 || om > 59) return false;
+    offsetSeconds = (oh * 3600 + om * 60) * (*zone == '+' ? 1 : -1);
+  } else return false;
+  tm utc = {};
+  utc.tm_year = year - 1900;
+  utc.tm_mon = month - 1;
+  utc.tm_mday = day;
+  utc.tm_hour = hour;
+  utc.tm_min = minute;
+  utc.tm_sec = second;
+  const time_t timestamp = timegm(&utc);
+  if (timestamp < 0) return false;
+  tm check = {};
+  gmtime_r(&timestamp, &check);
+  if (check.tm_year != year - 1900 || check.tm_mon != month - 1 ||
+      check.tm_mday != day || check.tm_hour != hour ||
+      check.tm_min != minute || check.tm_sec != second) return false;
+  const time_t adjusted = timestamp - offsetSeconds;
+  tm local = {};
+  if (!localtime_r(&adjusted, &local)) return false;
+  const int h12 = local.tm_hour % 12 ? local.tm_hour % 12 : 12;
+  snprintf(output, 20, "%d:%02d %s", h12, local.tm_min,
+           local.tm_hour < 12 ? "AM" : "PM");
+  return true;
+}
+
 void setStatus(JsonVariantConst value, Game &game) {
   JsonObjectConst status = value.as<JsonObjectConst>();
   const char *state = status["state"] | "";
@@ -194,11 +280,17 @@ void setStatus(JsonVariantConst value, Game &game) {
       snprintf(game.status, sizeof(game.status), "%s", periodText);
     }
   } else {
-    strcpy(game.status, "SCHEDULED");  // Phase 3 will add local start time.
+    strcpy(game.status, "SCHEDULED");
   }
+  game.scheduled = !game.showScores;
 }
 
 void setupFilter(JsonDocument &filter) {
+  filter["games"][0]["date"] = true;
+  filter["games"][0]["away"]["rank"] = true;
+  filter["games"][0]["away"]["record"] = true;
+  filter["games"][0]["home"]["rank"] = true;
+  filter["games"][0]["home"]["record"] = true;
   filter["games"][0]["away"]["code"] = true;
   filter["games"][0]["away"]["score"] = true;
   filter["games"][0]["away"]["primaryColor"] = true;
@@ -249,6 +341,15 @@ bool parseGames(Stream &stream) {
     g.awayColor = readColor(away["primaryColor"] | "");
     g.homeColor = readColor(home["primaryColor"] | "");
     setStatus(item["status"], g);
+    g.awayRank = readRank(away["rank"]);
+    g.homeRank = readRank(home["rank"]);
+    readRecord(away["record"], g.awayRecord);
+    readRecord(home["record"], g.homeRecord);
+    if (strcmp(g.status, "SCHEDULED") == 0) {
+      char startTime[20];
+      if (formatLocalStart(item["date"] | "", startTime))
+        strcpy(g.status, startTime);
+    }
     ++found;
   }
 
