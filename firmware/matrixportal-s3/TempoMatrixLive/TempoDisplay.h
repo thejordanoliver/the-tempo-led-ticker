@@ -10,6 +10,15 @@ uint32_t lastVisualFrameAt = 0;
 int16_t tickerX = 128;
 bool showAwayLogo = true;
 
+static const char *tempoLogoLeague() {
+  switch (league) {
+    case League::NBA: return "nba";
+    case League::NFL: return "nfl";
+    case League::CFB: return "cfb";
+    default: return "unknown";
+  }
+}
+
 static const char *tempoModeName() {
   switch (tempoMode) {
     case TempoDisplayMode::Scoreboard: return "scoreboard";
@@ -48,8 +57,8 @@ static void rankLabel(int8_t rank, char (&buffer)[5]) {
 static void drawScoreboard(const Game &g) {
   const uint16_t hint = rgb(185, 207, 255);
   const uint16_t white = rgb(245, 247, 255);
-  tempoLogo(leagueName(league), g.away, g.awayColor, 2, 3, 32);
-  tempoLogo(leagueName(league), g.home, g.homeColor, 94, 3, 32);
+  tempoLogo(tempoLogoLeague(), g.away, g.awayColor, 2, 3, 32);
+  tempoLogo(tempoLogoLeague(), g.home, g.homeColor, 94, 3, 32);
 
   // Same 128x64 anchors and variable text scale as simulator/index.html.
   const uint8_t awayScale = tempoTextWidth(g.away, 2) <= 36 ? 2 : 1;
@@ -102,7 +111,7 @@ static void drawLogoMode(const Game &g) {
   const char *team = showAwayLogo ? g.away : g.home;
   const uint16_t color = showAwayLogo ? g.awayColor : g.homeColor;
   const int8_t rank = showAwayLogo ? g.awayRank : g.homeRank;
-  tempoLogo(leagueName(league), team, color, 40, 1, 48);
+  tempoLogo(tempoLogoLeague(), team, color, 40, 1, 48);
   const uint8_t scale = tempoTextWidth(team, 2) <= WIDTH ? 2 : 1;
   tempoCentered(team, 53, rgb(245, 247, 255), scale);
   if (rank > 0) {
