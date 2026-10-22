@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include <Adafruit_Protomatter.h>
+#include <pgmspace.h>
 #include "TempoMiniFont.h"
 
 // Generated separately with tools/generate_matrix_logos.py, then compiled
