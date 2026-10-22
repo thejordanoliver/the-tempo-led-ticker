@@ -85,7 +85,8 @@ static void tempoText(int16_t x, int16_t y, const char *message,
 static void tempoCentered(const char *label, int16_t y, uint16_t color, uint8_t scale = 1) {
   if (!label) return;
   char bounded[48];
-  strlcpy(bounded, label, sizeof(bounded));
+  strncpy(bounded, label, sizeof(bounded) - 1);
+  bounded[sizeof(bounded) - 1] = '\0';
   while (*bounded && tempoTextWidth(bounded, scale) > 128) {
     bounded[strlen(bounded) - 1] = '\0';
   }
