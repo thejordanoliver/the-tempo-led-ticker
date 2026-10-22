@@ -1,0 +1,41 @@
+name: Ticker firmware preflight
+
+on:
+  pull_request:
+    paths:
+      - 'firmware/**'
+      - 'tools/generate_matrix_logos.py'
+      - 'tests/firmware/**'
+      - '.github/workflows/ticker-firmware-preflight.yml'
+  push:
+    branches:
+      - 'feat/matrixportal-s3-phase3'
+    paths:
+      - 'firmware/**'
+      - 'tools/generate_matrix_logos.py'
+      - 'tests/firmware/**'
+      - '.github/workflows/ticker-firmware-preflight.yml'
+
+jobs:
+  logo-tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Pillow
+        run: python -m pip install 'Pillow>=10,<13'
+      - name: Verify offline sprite generator
+        run: python -m unittest discover -s tests/firmware -v
+
+  simulator-unit-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm test
