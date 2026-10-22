@@ -10,3 +10,6 @@ build/
 *.log
 secrets.h
 **/secrets.h
+
+playwright-report/
+test-results/
